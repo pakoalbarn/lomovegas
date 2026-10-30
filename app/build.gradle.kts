@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.example.lomovegas"
-    compileSdk = 34
+    compileSdk = 35
     defaultConfig {
         applicationId = "com.example.lomovegas"
         minSdk = 26          // Redmi 7: Android 9 (API 28) o superior
