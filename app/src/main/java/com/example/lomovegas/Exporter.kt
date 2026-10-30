@@ -24,12 +24,17 @@ import java.io.File
 
 object Exporter {
 
+    /** Activa un ajuste experimental de Media3 solo si existe en la versión instalada. */
+    private fun tryFlag(builder: Any, name: String) {
+        try { builder.javaClass.getMethod(name, java.lang.Boolean.TYPE).invoke(builder, true) } catch (_: Exception) {}
+    }
+
     private fun item(c: Clip, kind: Kind): EditedMediaItem {
         val fade = c.fadeInMs > 0 || c.fadeOutMs > 0
         val audioFx: List<AudioProcessor> =
             if (fade && c.hasAudio) listOf(FadeAudio(c.fadeInMs, c.fadeOutMs, c.lengthMs)) else emptyList()
         val videoFx: List<Effect> =
-            if (fade && kind == Kind.VIDEO) listOf(FadeEffect(c.fadeInMs, c.fadeOutMs, c.lengthMs)) else emptyList()
+            if (fade && kind == Kind.VIDEO) listOf<Effect>(FadeEffect(c.fadeInMs, c.fadeOutMs, c.lengthMs)) else emptyList()
         val b = EditedMediaItem.Builder(c.toMediaItem()).setEffects(Effects(audioFx, videoFx))
         if (kind == Kind.AUDIO) b.setRemoveVideo(true)
         return b.build()
@@ -46,13 +51,11 @@ object Exporter {
         for (t in ordered) {
             if (!t.enabled || t.clips.isEmpty()) continue
             val clips = t.clips.sortedBy { it.startMs }
-            val types = mutableSetOf<Int>()
-            if (t.kind == Kind.VIDEO) {
-                types.add(C.TRACK_TYPE_VIDEO)
-                if (clips.any { it.hasAudio }) types.add(C.TRACK_TYPE_AUDIO)
-            } else types.add(C.TRACK_TYPE_AUDIO)
-
-            val b = EditedMediaItemSequence.Builder(types)
+            val b = EditedMediaItemSequence.Builder(emptyList<EditedMediaItem>())
+            val leadingGap = clips.first().startMs > 0
+            val anyAudio = clips.any { it.hasAudio }
+            if (t.kind == Kind.VIDEO && leadingGap) tryFlag(b, "experimentalSetForceVideoTrack")
+            if (anyAudio && (leadingGap || !clips.first().hasAudio)) tryFlag(b, "experimentalSetForceAudioTrack")
             var cursor = 0L
             for (c in clips) {
                 if (c.startMs > cursor) b.addGap((c.startMs - cursor) * 1000)
