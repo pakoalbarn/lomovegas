@@ -93,6 +93,8 @@ class EditorState {
     var playing by mutableStateOf(false)
     var zoom by mutableStateOf(0.04f)        // dp por milisegundo (zoom de la línea de tiempo)
     var projectName by mutableStateOf<String?>(null)
+    var draggingClipId by mutableStateOf<Long?>(null)   // clip que se está arrastrando
+    var notice by mutableStateOf<String?>(null)          // aviso para mostrar al usuario
     var cutMode by mutableStateOf(false)      // modo cortar: tocar un clip lo divide ahí
     var fitTick by mutableStateOf(0)          // se incrementa para pedir "ver todo el proyecto"
 
@@ -114,6 +116,9 @@ class EditorState {
         tracks.maxOfOrNull { t -> t.clips.maxOfOrNull { it.endMs } ?: 0L } ?: 0L,
         subtitles.maxOfOrNull { it.endMs } ?: 0L
     )
+    /** Pistas en el orden en que se dibujan: vídeo (la más nueva arriba) y luego audio. */
+    fun displayRows(): List<Track> =
+        tracks.filter { it.kind == Kind.VIDEO }.reversed() + tracks.filter { it.kind == Kind.AUDIO }
     fun selectedClip(): Clip? = tracks.flatMap { it.clips }.firstOrNull { it.id == selectedClipId }
     fun selectedSub(): Subtitle? = subtitles.firstOrNull { it.id == selectedSubId }
 
@@ -144,7 +149,7 @@ class EditorState {
     fun toggleMuted(id: Long) { tracks = tracks.map { if (it.id == id) it.copy(muted = !it.muted) else it } }
 
     // ---------- importar ----------
-    fun importMedia(ctx: Context, uri: Uri) {
+    fun importMedia(ctx: Context, uri: Uri, targetTrackId: Long? = null) {
         var name = "clip"
         ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
             val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -158,7 +163,8 @@ class EditorState {
             } catch (_: Exception) {}
             addClip(Kind.VIDEO, Clip(
                 id = newId(), uri = uri, name = name, hasVideo = true, hasAudio = false, isImage = true,
-                srcMs = 3_600_000L, startMs = 0L, inMs = 0L, outMs = 5000L, vw = o.outWidth, vh = o.outHeight))
+                srcMs = 3_600_000L, startMs = 0L, inMs = 0L, outMs = 5000L, vw = o.outWidth, vh = o.outHeight),
+                targetTrackId)
             return
         }
         val mmr = MediaMetadataRetriever()
@@ -177,11 +183,13 @@ class EditorState {
         if (dur <= 0) return
         addClip(if (hasVideo) Kind.VIDEO else Kind.AUDIO, Clip(
             id = newId(), uri = uri, name = name, hasVideo = hasVideo, hasAudio = hasAudio, isImage = false,
-            srcMs = dur, startMs = 0L, inMs = 0L, outMs = dur, vw = w, vh = h))
+            srcMs = dur, startMs = 0L, inMs = 0L, outMs = dur, vw = w, vh = h),
+            targetTrackId)
     }
 
-    private fun addClip(kind: Kind, clip: Clip) {
-        val target = tracks.firstOrNull { it.id == selectedTrackId && it.kind == kind }
+    private fun addClip(kind: Kind, clip: Clip, targetTrackId: Long? = null) {
+        val target = tracks.firstOrNull { it.id == targetTrackId && it.kind == kind }
+            ?: tracks.firstOrNull { it.id == selectedTrackId && it.kind == kind }
             ?: tracks.first { it.kind == kind }
         val start = target.clips.maxOfOrNull { it.endMs } ?: 0L
         val c = clip.copy(startMs = start)
@@ -201,6 +209,36 @@ class EditorState {
                 t.copy(clips = list)
             }
         }
+    }
+
+    /** Mueve un clip a otra pista del mismo tipo (shift = filas hacia abajo, negativo = hacia arriba). */
+    fun moveClipToRow(id: Long, shift: Int) {
+        if (shift == 0) return
+        val rows = displayRows()
+        val from = rows.indexOfFirst { t -> t.clips.any { it.id == id } }
+        if (from < 0) return
+        val src = rows[from]
+        var to = (from + shift).coerceIn(0, rows.lastIndex)
+        val step = if (to > from) -1 else 1
+        while (to != from && rows[to].kind != src.kind) to += step
+        if (to == from) {
+            notice = "Solo puedes mover un clip a otra pista del mismo tipo (vídeo con vídeo, audio con audio)."
+            return
+        }
+        val dst = rows[to]
+        val c = src.clips.first { it.id == id }
+        if (dst.clips.any { it.startMs < c.endMs && it.endMs > c.startMs }) {
+            notice = "No cabe: en esa pista ya hay un clip en ese tramo de tiempo. Muévelo antes a un hueco libre."
+            return
+        }
+        tracks = tracks.map { t ->
+            when (t.id) {
+                src.id -> t.copy(clips = t.clips.filter { it.id != id })
+                dst.id -> t.copy(clips = (t.clips + c).sortedBy { it.startMs })
+                else -> t
+            }
+        }
+        selectClip(id)
     }
 
     fun dragClip(id: Long, deltaMs: Long) = mutateClip(id) { c, minS, maxE ->

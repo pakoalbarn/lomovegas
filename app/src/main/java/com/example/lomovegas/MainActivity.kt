@@ -3,6 +3,7 @@ package com.example.lomovegas
 import android.content.Intent
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.TextureView
@@ -66,6 +67,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -120,6 +123,9 @@ class MainActivity : ComponentActivity() {
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { EditorScreen(state) } }
     }
 }
+
+fun kindOfUri(ctx: android.content.Context, u: Uri): Kind =
+    if ((ctx.contentResolver.getType(u) ?: "").startsWith("audio/")) Kind.AUDIO else Kind.VIDEO
 
 fun fmt(ms: Long) = "%d:%02d.%d".format(ms / 60000, ms / 1000 % 60, ms % 1000 / 100)
 fun fadeLabel(ms: Long) = if (ms == 0L) "corte" else "${ms / 1000.0} s"
@@ -210,10 +216,16 @@ fun EditorScreen(s: EditorState) {
     LaunchedEffect(Unit) { delay(1800); showSplash = false }
     val splashAlpha by animateFloatAsState(if (showSplash) 1f else 0f, tween(600), label = "splash")
 
+    var pending by remember { mutableStateOf<List<Uri>?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { uri ->
             runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            s.importMedia(ctx, uri)
+        }
+        if (uris.isNotEmpty()) {
+            val kinds = uris.map { kindOfUri(ctx, it) }.toSet()
+            // Si hay varias pistas del mismo tipo, se pregunta en cuál añadir
+            if (kinds.any { k -> s.tracks.count { it.kind == k } > 1 }) pending = uris
+            else uris.forEach { s.importMedia(ctx, it) }
         }
     }
 
@@ -315,6 +327,10 @@ fun EditorScreen(s: EditorState) {
                 }
             }
         }
+    }
+
+    LaunchedEffect(s.notice) {
+        s.notice?.let { message = it; s.notice = null }
     }
 
     // Reloj de reproducción
@@ -541,6 +557,52 @@ fun EditorScreen(s: EditorState) {
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancelar") } }
         )
     }
+    pending?.let { uris ->
+        val kinds = uris.map { kindOfUri(ctx, it) }.toSet()
+        var vSel by remember(uris) {
+            mutableStateOf(
+                s.tracks.firstOrNull { it.id == s.selectedTrackId && it.kind == Kind.VIDEO }?.id
+                    ?: s.tracks.first { it.kind == Kind.VIDEO }.id
+            )
+        }
+        var aSel by remember(uris) {
+            mutableStateOf(
+                s.tracks.firstOrNull { it.id == s.selectedTrackId && it.kind == Kind.AUDIO }?.id
+                    ?: s.tracks.first { it.kind == Kind.AUDIO }.id
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            title = { Text("¿En qué pista?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (Kind.VIDEO in kinds) {
+                        Text("Vídeos y fotos", fontSize = 12.sp)
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            s.tracks.filter { it.kind == Kind.VIDEO }.forEach { t ->
+                                FilterChip(selected = vSel == t.id, onClick = { vSel = t.id }, label = { Text(t.name) })
+                            }
+                        }
+                    }
+                    if (Kind.AUDIO in kinds) {
+                        Text("Audios", fontSize = 12.sp)
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            s.tracks.filter { it.kind == Kind.AUDIO }.forEach { t ->
+                                FilterChip(selected = aSel == t.id, onClick = { aSel = t.id }, label = { Text(t.name) })
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pending = null
+                    uris.forEach { u -> s.importMedia(ctx, u, if (kindOfUri(ctx, u) == Kind.AUDIO) aSel else vSel) }
+                }) { Text("Añadir") }
+            },
+            dismissButton = { TextButton(onClick = { pending = null }) { Text("Cancelar") } }
+        )
+    }
     message?.let {
         AlertDialog(onDismissRequest = { message = null },
             confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } },
@@ -657,11 +719,12 @@ fun TimelinePanel(s: EditorState, modifier: Modifier, onEdit: (Subtitle) -> Unit
     val vScroll = rememberScrollState()
     val density = LocalDensity.current.density
     val total = maxOf(s.totalMs() + 5000, 15_000L)
-    val contentW = (total * s.zoom).dp
-    val rows = s.tracks.filter { it.kind == Kind.VIDEO }.reversed() + s.tracks.filter { it.kind == Kind.AUDIO }
+    val rows = s.displayRows()
     val hasAuto = s.subtitles.any { it.track == 1 }
     val totalH = (20 + 44 * (rows.size + 1 + (if (hasAuto) 1 else 0))).dp
     var viewW by remember { mutableIntStateOf(0) }
+    // Siempre más ancho que la pantalla para poder desplazarse más allá del final
+    val contentW = maxOf((total * s.zoom).dp, (viewW / density).dp) + 160.dp
     var pendingScroll by remember { mutableStateOf<Int?>(null) }
 
     // Zoom con dos dedos: mantiene bajo los dedos el punto de la línea de tiempo que se está mirando
@@ -716,23 +779,44 @@ fun TimelinePanel(s: EditorState, modifier: Modifier, onEdit: (Subtitle) -> Unit
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        var accum = 0f
+                        var panning = false
                         do {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            val pressed = event.changes.filter { it.pressed }
-                            if (pressed.size >= 2) {
-                                val a = pressed[0]
-                                val b = pressed[1]
+                            // Dos dedos: zoom con pellizco
+                            val initial = awaitPointerEvent(PointerEventPass.Initial)
+                            val pressedI = initial.changes.filter { it.pressed }
+                            if (pressedI.size >= 2) {
+                                val a = pressedI[0]
+                                val b = pressedI[1]
                                 val dist = (a.position - b.position).getDistance()
                                 val prev = (a.previousPosition - b.previousPosition).getDistance()
                                 if (prev > 0f && dist > 0f) {
                                     pinch(dist / prev, (a.position.x + b.position.x) / 2f)
-                                    event.changes.forEach { it.consume() }
+                                    initial.changes.forEach { it.consume() }
+                                }
+                                panning = false
+                            }
+                            // Un dedo: desplazar la línea de tiempo (si nadie más ha usado el gesto)
+                            val main = awaitPointerEvent(PointerEventPass.Main)
+                            val pressedM = main.changes.filter { it.pressed }
+                            if (pressedM.size == 1) {
+                                val ch = pressedM[0]
+                                if (!ch.isConsumed) {
+                                    val dx = ch.position.x - ch.previousPosition.x
+                                    if (!panning) {
+                                        accum += dx
+                                        if (kotlin.math.abs(accum) > viewConfiguration.touchSlop) panning = true
+                                    }
+                                    if (panning) {
+                                        hScroll.dispatchRawDelta(-dx)
+                                        ch.consume()
+                                    }
                                 }
                             }
-                        } while (event.changes.any { it.pressed })
+                        } while (main.changes.any { it.pressed })
                     }
                 }
-                .horizontalScroll(hScroll)
+                .horizontalScroll(hScroll, enabled = false)
         ) {
             Column(Modifier.width(contentW)) {
                 Ruler(s, total, contentW, hScroll.value, viewW)
@@ -827,31 +911,49 @@ fun TrackRow(s: EditorState, tr: Track) {
     val dim = (tr.kind == Kind.VIDEO && tr.hidden) || tr.muted
     Box(
         Modifier.fillMaxWidth().height(44.dp)
+            .zIndex(if (tr.clips.any { it.id == s.draggingClipId }) 1f else 0f)
             .background(if (tr.id == s.selectedTrackId) Color(0xFF303030) else Color(0xFF252525))
             .pointerInput(s.zoom) {
                 detectTapGestures { s.selectedTrackId = tr.id; s.playheadMs = (it.x / density / s.zoom).toLong() }
             }
     ) {
         tr.clips.forEach { c ->
-            Box(
-                Modifier.offset(x = (c.startMs * s.zoom).dp)
-                    .width((c.lengthMs * s.zoom).dp).fillMaxHeight().padding(1.dp)
-                    .background(if (dim) Color(0xFF555555) else base)
-                    .then(if (c.id == s.selectedClipId) Modifier.border(2.dp, Color.White) else Modifier)
-                    .pointerInput(c.id, s.zoom) {
-                        detectTapGestures { off ->
-                            if (s.cutMode) s.splitAt(c.id, c.startMs + (off.x / density / s.zoom).toLong())
-                            else s.selectClip(c.id)
+            key(c.id) {
+                var dragY by remember { mutableFloatStateOf(0f) }
+                Box(
+                    Modifier.graphicsLayer { translationY = dragY }
+                        .offset(x = (c.startMs * s.zoom).dp)
+                        .width((c.lengthMs * s.zoom).dp).fillMaxHeight().padding(1.dp)
+                        .background(if (dim) Color(0xFF555555) else base)
+                        .then(if (c.id == s.selectedClipId) Modifier.border(2.dp, Color.White) else Modifier)
+                        .pointerInput(c.id, s.zoom) {
+                            detectTapGestures { off ->
+                                if (s.cutMode) s.splitAt(c.id, c.startMs + (off.x / density / s.zoom).toLong())
+                                else s.selectClip(c.id)
+                            }
                         }
-                    }
-                    .pointerInput(c.id, s.zoom) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { s.selectClip(c.id) },
-                            onDrag = { ch, d -> ch.consume(); s.dragClip(c.id, (d.x / density / s.zoom).toLong()) })
-                    }
-            ) {
-                Text("${clipTag(c)} ${c.name}", fontSize = 10.sp, color = Color.White, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(4.dp))
+                        // Mantener pulsado y arrastrar: izquierda/derecha mueve en el tiempo; arriba/abajo cambia de pista
+                        .pointerInput(c.id, s.zoom) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { s.selectClip(c.id); s.draggingClipId = c.id; dragY = 0f },
+                                onDrag = { ch, d ->
+                                    ch.consume()
+                                    s.dragClip(c.id, (d.x / density / s.zoom).toLong())
+                                    dragY += d.y
+                                },
+                                onDragEnd = {
+                                    val shift = Math.round(dragY / density / 44f)
+                                    dragY = 0f
+                                    s.draggingClipId = null
+                                    s.moveClipToRow(c.id, shift)
+                                },
+                                onDragCancel = { dragY = 0f; s.draggingClipId = null }
+                            )
+                        }
+                ) {
+                    Text("${clipTag(c)} ${c.name}", fontSize = 10.sp, color = Color.White, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(4.dp))
+                }
             }
         }
     }

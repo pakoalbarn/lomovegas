@@ -49,3 +49,8 @@ Selecciona un clip y abre 🎚.
 - Audio: voz aguda, voz grave, ardilla, monstruo, distorsión, robot, eco, teléfono.
 - Vista previa: se ven los efectos de color (B/N, sepia, negativo, colores vivos) y se oyen los de tono.
   Ondular, abombado, espejo, glitch y los efectos de audio de distorsión, robot, eco y teléfono se aplican al exportar.
+
+## Pistas
+- Al importar, si hay varias pistas del mismo tipo, la app pregunta en cuál añadir.
+- Mantén pulsado un clip y arrastra: izquierda/derecha lo mueve en el tiempo; arriba/abajo lo pasa a otra pista del mismo tipo.
+- Desplazarse por la línea de tiempo: arrastra con un dedo sobre las pistas.
