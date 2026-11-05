@@ -3,14 +3,14 @@ package com.example.lomovegas
 import android.content.Context
 import android.opengl.GLES20
 import androidx.media3.common.C
-import androidx.media3.effect.GlEffect
-import androidx.media3.effect.GlShaderProgram
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.GlProgram
 import androidx.media3.common.util.GlUtil
 import androidx.media3.common.util.Size
 import androidx.media3.effect.BaseGlShaderProgram
+import androidx.media3.effect.GlEffect
+import androidx.media3.effect.GlShaderProgram
 import java.nio.ByteBuffer
 
 /** Ganancia 0..1 de un fundido de entrada/salida. rMs = tiempo dentro del clip. */

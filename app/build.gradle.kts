@@ -10,8 +10,9 @@ android {
         applicationId = "com.example.lomovegas"
         minSdk = 26          // Redmi 7: Android 9 (API 28) o superior
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 5
+        versionName = "0.5"
+        ndk { abiFilters += listOf("arm64-v8a") }   // Redmi Note 10 (y Redmi 7) son arm64
     }
     buildTypes { release { isMinifyEnabled = false } }
     compileOptions {
@@ -20,7 +21,10 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
-        freeCompilerArgs += listOf("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
+        freeCompilerArgs += listOf(
+            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+            "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
+        )
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
@@ -38,6 +42,11 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.animation:animation")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.core:core-ktx:1.13.1")
+
+    // Reconocimiento de voz sin conexión
+    implementation("com.alphacephei:vosk-android:0.3.47")
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
 }
