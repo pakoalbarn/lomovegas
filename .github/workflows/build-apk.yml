@@ -16,6 +16,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Descargar modelo de voz en español (se incluye dentro de la app)
+        run: |
+          mkdir -p app/src/main/assets
+          curl -L --fail -o model.zip https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip
+          unzip -q model.zip -d model_tmp
+          mv model_tmp/vosk-model-* app/src/main/assets/model-es
+          rm -rf model.zip model_tmp
+          ls -la app/src/main/assets/model-es
+          test -d app/src/main/assets/model-es/am
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
